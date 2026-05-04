@@ -49,3 +49,13 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# ── Testing ─────────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+bandit-report.json
+bandit-report.html
