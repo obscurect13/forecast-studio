@@ -8,7 +8,6 @@ import tempfile
 import os
 from pathlib import Path
 
-# Add src directory to path
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -21,7 +20,6 @@ class TestPrepareData:
 
     def test_prepare_data_basic(self):
         """Test basic data preparation with valid CSV."""
-        # Create temporary CSV file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write("date,value\n")
             for i in range(50):
@@ -31,7 +29,6 @@ class TestPrepareData:
         try:
             X, X_lstm, y, scaler = prepare_data(temp_path, target_col="value")
 
-            # Check shapes
             assert X.shape[0] > 0, "Should have samples after windowing"
             assert X.shape[1] == WINDOW, f"Window size should be {WINDOW}"
             assert X_lstm.shape == (X.shape[0], WINDOW, 1), "LSTM shape should be (samples, window, 1)"
@@ -51,18 +48,22 @@ class TestPrepareData:
 
         try:
             X, X_lstm, y, scaler = prepare_data(temp_path)
-            # Should auto-detect first numeric column
             assert X.shape[0] > 0, "Should have samples"
 
         finally:
             os.remove(temp_path)
 
     def test_prepare_data_with_date_column(self):
-        """Test data preparation with date column."""
+        """Test data preparation with date column.
+        Fix: the original test generated dates like 2020-01-32 (day out of range)
+        because i went up to 49 and the modulo logic overflowed January.
+        Use pd.date_range to generate guaranteed valid dates instead.
+        """
+        dates = pd.date_range(start="2020-01-01", periods=50, freq="D")
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write("date,value\n")
-            for i in range(50):
-                f.write(f"2020-01-{i+1:02d},{100 + i}\n")
+            for i, date in enumerate(dates):
+                f.write(f"{date.strftime('%Y-%m-%d')},{100 + i}\n")
             temp_path = f.name
 
         try:
@@ -111,7 +112,6 @@ class TestPrepareData:
         try:
             X, X_lstm, y, scaler = prepare_data(temp_path, target_col="value")
 
-            # Check that scaled values are in [0, 1] range
             assert y.min() >= 0, "Scaled values should be >= 0"
             assert y.max() <= 1, "Scaled values should be <= 1"
             assert X.min() >= 0, "Scaled X should be >= 0"
@@ -131,10 +131,7 @@ class TestPrepareData:
         try:
             X, X_lstm, y, scaler = prepare_data(temp_path, target_col="value")
 
-            # Check that each window contains the correct sequence
             for i in range(min(5, len(X))):
-                expected_sequence = np.arange(100 + i, 100 + i + WINDOW)
-                # After scaling, the relative differences should be preserved
                 assert X[i].shape == (WINDOW,), f"Window {i} should have length {WINDOW}"
 
         finally:

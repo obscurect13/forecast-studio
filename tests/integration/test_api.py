@@ -2,10 +2,10 @@
 Integration tests for the FastAPI application.
 """
 import pytest
-import asyncio
 import tempfile
 import os
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 # Add src directory to path
@@ -23,7 +23,7 @@ def client():
 
 @pytest.fixture
 def sample_csv_file():
-    """Create a sample CSV file for testing."""
+    """Create a sample CSV file for testing (41 rows — above WINDOW=20 minimum)."""
     csv_content = """date,value
 01-01-2020,100.0
 02-01-2020,102.5
@@ -74,7 +74,6 @@ def sample_csv_file():
 
     yield temp_path
 
-    # Cleanup
     if os.path.exists(temp_path):
         os.remove(temp_path)
 
@@ -130,14 +129,19 @@ class TestAPIEndpoints:
         data = response.json()
         assert "job_id" in data
 
-    def test_job_status_endpoint(self, client):
-        """Test the job-status endpoint."""
-        # First, create a job
-        csv_content = b"date,value\n01-01-2020,100.0\n02-01-2020,102.5\n"
-        response = client.post(
-            "/compare-models",
-            files={"file": ("test.csv", csv_content, "text/csv")}
-        )
+    def test_job_status_endpoint(self, client, sample_csv_file):
+        """Test the job-status endpoint.
+        Fix: use sample_csv_file (41 rows) instead of a 2-row inline CSV
+        that was below the WINDOW=20 minimum and caused a 400 error.
+        """
+        with open(sample_csv_file, 'rb') as f:
+            response = client.post(
+                "/compare-models",
+                files={"file": ("test.csv", f, "text/csv")},
+                params={"target_col": "value"}
+            )
+
+        assert response.status_code == 200
         job_id = response.json()["job_id"]
 
         # Check job status
@@ -152,16 +156,19 @@ class TestAPIEndpoints:
         response = client.get("/job-status/non-existent-job-id")
         assert response.status_code == 404
 
-    def test_predict_best_without_training(self, client, sample_csv_file):
-        """Test predict-best endpoint without prior training (should fail)."""
-        with open(sample_csv_file, 'rb') as f:
-            response = client.post(
-                "/predict-best",
-                files={"file": ("test.csv", f, "text/csv")},
-                params={"target_col": "value", "n_steps": 10}
-            )
+    def test_predict_best_without_training(self, client, sample_csv_file, tmp_path):
+        """Test predict-best endpoint without prior training (should fail).
+        Fix: patch MODELS_DIR to an empty tmp_path so the test is not affected
+        by any best_config.pkl already present in the real models/ folder.
+        """
+        with patch("api.main.MODELS_DIR", str(tmp_path)):
+            with open(sample_csv_file, 'rb') as f:
+                response = client.post(
+                    "/predict-best",
+                    files={"file": ("test.csv", f, "text/csv")},
+                    params={"target_col": "value", "n_steps": 10}
+                )
 
-        # Should return 404 because no model is trained yet
         assert response.status_code == 404
 
     def test_compare_models_invalid_file(self, client):
@@ -172,26 +179,28 @@ class TestAPIEndpoints:
             files={"file": ("test.txt", invalid_content, "text/plain")}
         )
 
-        # Should return an error
         assert response.status_code != 200
 
     def test_compare_models_insufficient_data(self, client):
         """Test compare-models with insufficient data."""
-        # Create CSV with insufficient data
         insufficient_csv = b"date,value\n01-01-2020,100.0\n02-01-2020,102.5\n"
         response = client.post(
             "/compare-models",
             files={"file": ("test.csv", insufficient_csv, "text/csv")}
         )
 
-        # Should return 400 error
         assert response.status_code == 400
 
     def test_cors_headers(self, client):
-        """Test that CORS headers are properly set."""
-        response = client.get("/health")
+        """Test that CORS headers are properly set.
+        Fix: CORS middleware only injects headers when the request includes
+        an Origin header — a plain GET without it won't trigger CORS.
+        """
+        response = client.get(
+            "/health",
+            headers={"Origin": "http://localhost:8501"}
+        )
         assert response.status_code == 200
-        # Check for CORS headers
         assert "access-control-allow-origin" in response.headers
 
 
@@ -203,7 +212,6 @@ class TestAPIWorkflow:
 
     def test_complete_training_workflow(self, client, sample_csv_file):
         """Test complete workflow: submit job, check status, get results."""
-        # Submit training job
         with open(sample_csv_file, 'rb') as f:
             response = client.post(
                 "/compare-models",
@@ -214,8 +222,6 @@ class TestAPIWorkflow:
         assert response.status_code == 200
         job_id = response.json()["job_id"]
 
-        # Poll job status (note: in real scenario, this might take time)
-        # For testing, we just check that the endpoint works
         response = client.get(f"/job-status/{job_id}")
         assert response.status_code == 200
         data = response.json()
@@ -225,7 +231,6 @@ class TestAPIWorkflow:
         """Test handling multiple concurrent jobs."""
         job_ids = []
 
-        # Submit multiple jobs
         for i in range(3):
             with open(sample_csv_file, 'rb') as f:
                 response = client.post(
@@ -235,11 +240,9 @@ class TestAPIWorkflow:
                 )
             job_ids.append(response.json()["job_id"])
 
-        # Check that all jobs were created
         assert len(job_ids) == 3
         assert len(set(job_ids)) == 3  # All job IDs should be unique
 
-        # Check status of each job
         for job_id in job_ids:
             response = client.get(f"/job-status/{job_id}")
             assert response.status_code == 200

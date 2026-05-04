@@ -34,10 +34,29 @@ forecast-project/
 │   ├── best_model_arima.pkl        # Best ARIMA model (if applicable)
 │   └── best_config.pkl             # Best model name + params
 │
+├── tests/
+│   ├── conftest.py                 # Shared fixtures
+│   ├── test_smoke.py               # Infrastructure smoke tests (12 tests)
+│   ├── fixtures/
+│   │   └── sample_timeseries.csv  # Sample test data (40 rows)
+│   ├── unit/
+│   │   ├── test_models.py          # Model creation & prediction tests (18 tests)
+│   │   ├── test_prepare_data.py    # Data preparation tests (8 tests)
+│   │   └── test_logger_config.py   # Logger tests (8 tests)
+│   └── integration/
+│       └── test_api.py             # API integration tests (10 tests)
+│
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml               # GitHub Actions CI/CD pipeline
+│
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
 ├── requirements.txt
+├── requirements-test.txt
+├── pytest.ini
+├── run_tests.sh
 ├── start.sh
 └── README.md
 ```
@@ -239,6 +258,82 @@ The `-d` flag runs the containers in the background — the app stays alive even
 - FastAPI docs → `http://<your-ec2-public-ip>:8000/docs`
 
 > **Note:** The public IP changes every time you stop and restart the instance. To keep a fixed IP, allocate an **Elastic IP** from the EC2 console and attach it to your instance — it's free as long as the instance is running.
+
+---
+
+## Testing
+
+### Test structure
+
+56 tests across 4 layers — unit, integration, smoke, and API:
+
+| Layer | File | Tests | What it covers |
+|---|---|---|---|
+| Smoke | `test_smoke.py` | 12 | Imports, project structure, module loadability |
+| Unit | `test_models.py` | 18 | Model creation & prediction for all 9 model types |
+| Unit | `test_prepare_data.py` | 8 | CSV loading, scaling, windowing, error handling |
+| Unit | `test_logger_config.py` | 8 | Logger creation, levels, handlers, formatters |
+| Integration | `test_api.py` | 10 | All API endpoints, CORS, error handling, concurrent jobs |
+
+### Running tests
+
+Install test dependencies first:
+
+```bash
+pip install -r requirements-test.txt
+```
+
+Then run:
+
+```bash
+# All tests
+pytest
+
+# By category
+pytest tests/unit/
+pytest tests/integration/
+pytest -m api
+
+# Skip slow tests
+pytest -m "not slow"
+
+# With coverage report
+pytest --cov=src --cov=api --cov-report=html
+```
+
+Or use the convenience script:
+
+```bash
+./run_tests.sh --unit --coverage
+./run_tests.sh --api --verbose
+./run_tests.sh --help
+```
+
+Coverage target is **>80%** overall. HTML report is generated at `htmlcov/index.html`.
+
+---
+
+## CI/CD Pipeline
+
+The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs automatically on every push and pull request to `main` or `develop`.
+
+### Stages
+
+| Stage | What it does |
+|---|---|
+| **Test** | Runs the full test suite across Python 3.9, 3.10, 3.11 |
+| **Build** | Builds the Docker image and runs smoke tests against it |
+| **Security Scan** | Runs Bandit static analysis for security vulnerabilities |
+| **Deploy** | SSHes into the EC2 instance and pulls + restarts the container (main branch only) |
+
+### GitHub Secrets required for deployment
+
+| Secret | Description |
+|---|---|
+| `DOCKER_USERNAME` | Docker Hub username |
+| `DOCKER_PASSWORD` | Docker Hub password or access token |
+| `AWS_EC2_HOST` | EC2 instance public IP |
+| `AWS_EC2_SSH_KEY` | SSH private key (contents of your `.pem` file) |
 
 ---
 
