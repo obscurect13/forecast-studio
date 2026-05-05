@@ -72,9 +72,10 @@ def background_train_task(job_id: str, X, X_lstm, y):
             name = r["model"]
             if name not in scores_by_model or r["mse"] < scores_by_model[name]["mse"]:
                 scores_by_model[name] = {
-                    "mse":    float(r["mse"]),
-                    "rmse":   float(np.sqrt(r["mse"])),
-                    "mae":  float(r["mae"]),
+                    "mse":         float(r["mse"]),
+                    "rmse":        float(np.sqrt(r["mse"])),
+                    "mae":         float(r["mae"]),
+                    "r2":          float(r["r2"]),
                     "best_params": r["params"],
                 }
 
