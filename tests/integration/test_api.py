@@ -172,24 +172,54 @@ class TestAPIEndpoints:
         assert response.status_code == 404
 
     def test_compare_models_invalid_file(self, client):
-        """Test compare-models with invalid file."""
+        """Test compare-models with invalid file.
+        Fix: /compare-models now always returns 200 immediately (async job system).
+        The validation error happens in the background task — check job status for 'failed'.
+        """
         invalid_content = b"not a valid csv file"
         response = client.post(
             "/compare-models",
             files={"file": ("test.txt", invalid_content, "text/plain")}
         )
 
-        assert response.status_code != 200
+        assert response.status_code == 200
+        job_id = response.json()["job_id"]
+
+        # Poll until job reaches a terminal state
+        import time
+        for _ in range(15):
+            status_resp = client.get(f"/job-status/{job_id}")
+            job_data = status_resp.json()
+            if job_data["status"] in ["completed", "failed"]:
+                break
+            time.sleep(1)
+
+        assert job_data["status"] == "failed"
 
     def test_compare_models_insufficient_data(self, client):
-        """Test compare-models with insufficient data."""
+        """Test compare-models with insufficient data.
+        Fix: /compare-models now always returns 200 immediately (async job system).
+        The validation error happens in the background task — check job status for 'failed'.
+        """
         insufficient_csv = b"date,value\n01-01-2020,100.0\n02-01-2020,102.5\n"
         response = client.post(
             "/compare-models",
             files={"file": ("test.csv", insufficient_csv, "text/csv")}
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 200
+        job_id = response.json()["job_id"]
+
+        # Poll until job reaches a terminal state
+        import time
+        for _ in range(15):
+            status_resp = client.get(f"/job-status/{job_id}")
+            job_data = status_resp.json()
+            if job_data["status"] in ["completed", "failed"]:
+                break
+            time.sleep(1)
+
+        assert job_data["status"] == "failed"
 
     def test_cors_headers(self, client):
         """Test that CORS headers are properly set.
