@@ -397,6 +397,10 @@ with tab1:
         preview_df = pd.read_csv(uploaded)
         uploaded.seek(0)
 
+        # Calculate file size
+        file_size_mb = len(uploaded.getvalue()) / (1024 * 1024)
+        file_size_str = f"{file_size_mb:.2f} MB"
+
         with st.expander("Preview data", expanded=False):
             st.dataframe(
                 preview_df.head(10),
@@ -405,10 +409,17 @@ with tab1:
             )
         st.markdown(
             f'<span style="font-family:Space Mono;font-size:0.72rem;color:#475569;">'
-            f'{len(preview_df)} rows · {len(preview_df.columns)} columns</span>',
+            f'{len(preview_df)} rows · {len(preview_df.columns)} columns · {file_size_str}</span>',
             unsafe_allow_html=True
         )
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # Show warning for large files
+        if file_size_mb > 10:
+            st.warning(
+                f"⚠️ Large file detected ({file_size_str}). "
+                "Processing may take several minutes. Please be patient."
+            )
 
         if st.button("🚀  Run Model Comparison", key="run_compare"):
             with st.spinner("Initializing training job..."):
@@ -419,50 +430,54 @@ with tab1:
                         files={"file": (uploaded.name, uploaded.getvalue(), "text/csv")},
                         params={"target_col": target_col} if target_col else {},
                     )
-                    
+
                     if resp.status_code == 200:
                         job_id = resp.json()["job_id"]
-                        
+                        file_size = resp.json().get("file_size", 0)
+
                         # 2. Polling loop to wait for training completion
                         status = "started"
-                        while status in ["pending", "started", "training"]:
-                            time.sleep(2) # Wait 2 seconds between each check
+                        status_text = st.empty()
+                        elapsed_text = st.empty()
+                        start_time = time.time()
+
+                        while status in ["pending", "started", "preparing", "training"]:
+                            elapsed = int(time.time() - start_time)
+                            mins, secs = divmod(elapsed, 60)
+
+                            if status == "pending":
+                                status_text.info("⏳ Job queued...")
+                            elif status in ["started", "preparing"]:
+                                status_text.info("📊 Preparing data...")
+                            elif status == "training":
+                                status_text.info("🤖 Training models — comparing all configurations...")
+
+                            elapsed_text.markdown(
+                                f"<p style='color:#6b7280; font-size:0.85rem;'>⏱ Elapsed: "
+                                f"{'%02d:%02d' % (mins, secs)}</p>",
+                                unsafe_allow_html=True
+                            )
+
+                            time.sleep(2)
                             status_resp = requests.get(f"{API_URL}/job-status/{job_id}")
-                            
+
                             if status_resp.status_code == 200:
                                 job_data = status_resp.json()
                                 status = job_data["status"]
-                                
+
                                 if status == "completed":
+                                    elapsed = int(time.time() - start_time)
+                                    mins, secs = divmod(elapsed, 60)
+                                    status_text.empty()
+                                    elapsed_text.empty()
+
                                     # Retrieve final data
                                     data = job_data["result"]
                                     results = data["results"]
                                     best = data["best_model"]
-                                    
+
                                     # Display results
                                     st.success("Training complete!")
-
-                                    # Top metrics row
-                                    st.markdown("<br>", unsafe_allow_html=True)
-                                    st.markdown('<p class="section-title">Results</p>', unsafe_allow_html=True)
-
-                                    cols = st.columns(10)
-                                    for i, (mname, scores) in enumerate(results.items()):
-                                        is_best = (mname == best)
-                                        with cols[i]:
-                                            st.markdown(
-                                                metric_card(
-                                                    f"{mname.upper()} {'★' if is_best else ''}",
-                                                    f"{scores['rmse']:.4f}",
-                                                    f"MAE: {scores['mae']:.4f}",
-                                                    f"MSE: {scores['mse']:.4f}",
-                                                    f"R²: {scores['r2']:.4f}",
-                                                ),
-                                                unsafe_allow_html=True
-                                            )
-
-                                    st.markdown("<br>", unsafe_allow_html=True)
-
                                     # Best model callout
                                     st.markdown(
                                         f'''
@@ -522,9 +537,13 @@ with tab1:
                                         hide_index=True,
                                     )
                                 elif status == "failed":
+                                    status_text.empty()
+                                    elapsed_text.empty()
                                     st.error(f"Training failed: {job_data.get('error')}")
                                     break
                             else:
+                                status_text.empty()
+                                elapsed_text.empty()
                                 st.error("Failed to fetch job status.")
                                 break
                     else:
@@ -576,10 +595,26 @@ with tab2:
         preview_df2 = pd.read_csv(uploaded2)
         uploaded2.seek(0)
 
+        # Calculate file size
+        file_size_mb = len(uploaded2.getvalue()) / (1024 * 1024)
+        file_size_str = f"{file_size_mb:.2f} MB"
+
         with st.expander("Preview data", expanded=False):
             st.dataframe(preview_df2.head(10), use_container_width=False, hide_index=True)
 
+        st.markdown(
+            f'<span style="font-family:Space Mono;font-size:0.72rem;color:#475569;">'
+            f'{len(preview_df2)} rows · {len(preview_df2.columns)} columns · {file_size_str}</span>',
+            unsafe_allow_html=True
+        )
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # Show warning for large files
+        if file_size_mb > 10:
+            st.warning(
+                f"⚠️ Large file detected ({file_size_str}). "
+                "Processing may take several minutes. Please be patient."
+            )
 
         if st.button("🔮  Run Best Model Inference", key="run_best"):
             with st.spinner("Running inference…"):
@@ -591,7 +626,7 @@ with tab2:
                         f"{API_URL}/predict-best",
                         files={"file": (uploaded2.name, uploaded2.getvalue(), "text/csv")},
                         params=params_req,
-                        timeout=120,
+                        timeout=300,  # 5 minutes timeout for large files
                     )
                     if resp.status_code == 200:
                         data = resp.json()

@@ -39,11 +39,13 @@ param_grid = {
         {"units": 64, "units2": 32, "dropout": 0.2, "learning_rate": 0.001},
         {"units": 128, "units2": 64, "dropout": 0.3, "learning_rate": 0.0005, "recurrent_dropout": 0.1},
     ],
-    "prophet": [
-        {"growth": "linear", "changepoint_prior_scale": 0.05, "seasonality_prior_scale": 10},
-        {"growth": "linear", "changepoint_prior_scale": 0.1, "seasonality_prior_scale": 5, "yearly_seasonality": True},
-        {"growth": "logistic", "changepoint_prior_scale": 0.05, "seasonality_prior_scale": 10},
-    ],
+    # Prophet disabled in Docker/Linux deployment due to Stan backend
+    # incompatibility with Python 3.12. Works locally via conda.
+    # "prophet": [
+    #     {"growth": "linear", "changepoint_prior_scale": 0.05, "seasonality_prior_scale": 10},
+    #     {"growth": "linear", "changepoint_prior_scale": 0.1, "seasonality_prior_scale": 5, "yearly_seasonality": True},
+    #     {"growth": "logistic", "changepoint_prior_scale": 0.05, "seasonality_prior_scale": 10},
+    # ],
     "arima": [
         {"p": 1, "d": 1, "q": 1},
         {"p": 2, "d": 1, "q": 2},

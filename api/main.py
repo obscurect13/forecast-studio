@@ -44,54 +44,64 @@ app.add_middleware(
 # In-memory storage for jobs (For production, use Redis or a persistent DB)
 jobs: Dict[str, dict] = {}
 
-# ── Shared Helpers ────────────────────────────────────────────────────────────
-
-def prepare_from_upload(content: bytes, target_col: Optional[str] = None):
-    """Write uploaded bytes to a temporary file, then call prepare_data()."""
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-    try:
-        X, X_lstm, y, scaler = prepare_data(tmp_path, target_col=target_col or None)
-    finally:
-        os.remove(tmp_path)
-    return X, X_lstm, y, scaler
-
 # ── Background Training Logic ────────────────────────────────────────────────
 
-def background_train_task(job_id: str, X, X_lstm, y):
-    """Function executed in the background to handle model training."""
+def background_prepare_and_train(job_id: str, content: bytes, target_col: Optional[str] = None):
+    """Function executed in the background to handle data preparation and model training."""
     try:
-        jobs[job_id]["status"] = "training"
-        # run_training saves the best model to MODELS_DIR automatically
-        best, all_results = run_training(X, X_lstm, y, models_dir=MODELS_DIR)
+        jobs[job_id]["status"] = "preparing"
+        logger.info(f"Job {job_id}: Starting data preparation")
 
-        # Group scores by model for final report
-        scores_by_model = {}
-        for r in all_results:
-            name = r["model"]
-            if name not in scores_by_model or r["mse"] < scores_by_model[name]["mse"]:
-                scores_by_model[name] = {
-                    "mse":         float(r["mse"]),
-                    "rmse":        float(np.sqrt(r["mse"])),
-                    "mae":         float(r["mae"]),
-                    "r2":          float(r["r2"]),
-                    "best_params": r["params"],
-                }
+        # Write uploaded bytes to a temporary file
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
 
-        # Update job status with results
-        jobs[job_id].update({
-            "status": "completed",
-            "result": {
-                "results":                 scores_by_model,
-                "best_model":              best["model"],
-                "best_params":             best["params"],
-                "best_score":              float(best["mse"]),
-                "samples_after_windowing": int(len(y)),
-            },
-            "completed_at": datetime.now().isoformat()
-        })
+        try:
+            # Prepare data (this can be slow for large files)
+            X, X_lstm, y, scaler = prepare_data(tmp_path, target_col=target_col or None)
+            logger.info(f"Job {job_id}: Data preparation complete - {len(y)} samples")
+
+            # Update status to training
+            jobs[job_id]["status"] = "training"
+            logger.info(f"Job {job_id}: Starting model training")
+
+            # run_training saves the best model to MODELS_DIR automatically
+            best, all_results = run_training(X, X_lstm, y, models_dir=MODELS_DIR)
+            logger.info(f"Job {job_id}: Training complete - best model: {best['model']}")
+
+            # Group scores by model for final report
+            scores_by_model = {}
+            for r in all_results:
+                name = r["model"]
+                if name not in scores_by_model or r["mse"] < scores_by_model[name]["mse"]:
+                    scores_by_model[name] = {
+                        "mse":         float(r["mse"]),
+                        "rmse":        float(np.sqrt(r["mse"])),
+                        "mae":         float(r["mae"]),
+                        "r2":          float(r["r2"]),
+                        "best_params": r["params"],
+                    }
+
+            # Update job status with results
+            jobs[job_id].update({
+                "status": "completed",
+                "result": {
+                    "results":                 scores_by_model,
+                    "best_model":              best["model"],
+                    "best_params":             best["params"],
+                    "best_score":              float(best["mse"]),
+                    "samples_after_windowing": int(len(y)),
+                },
+                "completed_at": datetime.now().isoformat()
+            })
+            logger.info(f"Job {job_id}: Job completed successfully")
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
     except Exception as e:
+        logger.error(f"Job {job_id}: Failed with error: {str(e)}", exc_info=True)
         jobs[job_id].update({
             "status": "failed",
             "error": str(e)
@@ -112,23 +122,30 @@ async def compare_models(
     """
     Triggers model training in the background and returns a job_id immediately.
     Prevents HTTP timeout during long training processes.
+    Data preparation is also done in the background to avoid blocking on large files.
     """
+    # Read file content immediately (this is fast)
     content = await file.read()
-    try:
-        X, X_lstm, y, _ = prepare_from_upload(content, target_col)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+
+    # Validate file size (optional - prevent extremely large uploads)
+    file_size = len(content)
+    if file_size > 100 * 1024 * 1024:  # 100 MB limit
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({file_size / 1024 / 1024:.1f} MB). Maximum size is 100 MB."
+        )
 
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "status": "pending",
-        "created_at": datetime.now().isoformat()
+        "created_at": datetime.now().isoformat(),
+        "file_size": file_size
     }
 
-    # Dispatch the training task to the background executor
-    background_tasks.add_task(background_train_task, job_id, X, X_lstm, y)
+    # Dispatch the entire pipeline (data prep + training) to the background
+    background_tasks.add_task(background_prepare_and_train, job_id, content, target_col)
 
-    return {"job_id": job_id, "status": "started"}
+    return {"job_id": job_id, "status": "started", "file_size": file_size}
 
 @app.get("/job-status/{job_id}")
 async def get_job_status(job_id: str):
@@ -161,7 +178,14 @@ async def predict_best(
 
     content = await file.read()
     try:
-        X, X_lstm, y, scaler = prepare_from_upload(content, target_col)
+        # Write uploaded bytes to a temporary file, then call prepare_data()
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            X, X_lstm, y, scaler = prepare_data(tmp_path, target_col=target_col or None)
+        finally:
+            os.remove(tmp_path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

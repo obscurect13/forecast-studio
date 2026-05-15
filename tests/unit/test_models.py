@@ -87,9 +87,9 @@ class TestModelCreation:
         assert model.input_shape == (None, WINDOW, 1)
 
     @pytest.mark.skip(
-        reason="Prophet fails to initialize its Stan backend on some CI environments "
-               "(Python 3.11 + pystan incompatibility). "
-               "Prophet is tested end-to-end in integration tests instead."
+        reason="Prophet is disabled in Docker/Linux deployment due to Stan backend "
+               "incompatibility with Python 3.12. Removed from param_grid_config.py "
+               "for cloud deployment. Works locally via conda."
     )
     def test_get_model_prophet(self):
         """Test Prophet model creation."""
@@ -139,9 +139,9 @@ class TestModelCreation:
         assert hasattr(model, 'fit')
 
     @pytest.mark.skip(
-        reason="Prophet fails to initialize its Stan backend on some CI environments "
-               "(Python 3.11 + pystan incompatibility). "
-               "Prophet is tested end-to-end in integration tests instead."
+        reason="Prophet is disabled in Docker/Linux deployment due to Stan backend "
+               "incompatibility with Python 3.12. Removed from param_grid_config.py "
+               "for cloud deployment. Works locally via conda."
     )
     def test_get_prophet_model(self):
         """Test Prophet model helper function."""
